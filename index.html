@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="끼니별로 먹은 음식을 기록하고 열량과 영양소를 확인하세요.">
+  <meta name="theme-color" content="#f5f6f1">
+  <title>한끼 | 식습관 분석</title>
+  <link rel="icon" href="./assets/bowl.png" type="image/png">
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./data/foods.js" defer></script>
+  <script src="./nutrition.js" defer></script>
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#workspace">본문으로 건너뛰기</a>
+  <header class="sidebar">
+    <a class="brand" href="#today" aria-label="한끼, 오늘 화면">
+      <span class="brand-mark"><img src="./assets/bowl.png" alt="" width="25" height="25"></span>
+      <span>한끼</span>
+    </a>
+    <nav class="navigation" aria-label="주 메뉴">
+      <a class="nav-item" href="#today" data-view="today" aria-current="page">
+        <img src="./assets/home.png" alt="" width="21" height="21"><span>오늘</span>
+      </a>
+      <a class="nav-item" href="#record" data-view="record">
+        <img src="./assets/book.png" alt="" width="21" height="21"><span>식단 기록</span>
+      </a>
+      <a class="nav-item" href="#report" data-view="report">
+        <img src="./assets/chart.png" alt="" width="21" height="21"><span>리포트</span>
+      </a>
+    </nav>
+  </header>
+  <main id="workspace" class="workspace" tabindex="-1">
+    <div id="storage-notice" class="notice" role="alert" hidden>
+      브라우저 저장소를 사용할 수 없어 현재 창에서만 기록을 유지해요.
+    </div>
+    <div id="view"></div>
+    <noscript>브라우저에서 자바스크립트를 켜면 식사를 기록할 수 있어요.</noscript>
+  </main>
+  <div id="announcement" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+  <dialog id="custom-food" aria-labelledby="custom-title">
+    <form id="custom-form">
+      <div class="section-head">
+        <h2 id="custom-title">음식 직접 추가</h2>
+        <button type="button" class="icon-button" data-action="close-custom" aria-label="닫기">×</button>
+      </div>
+      <p class="hint">영양표시에 적힌 기준 중량과 성분량을 입력하세요. 표시가 없는 성분은 비워 둘 수 있어요.</p>
+      <label class="field">음식 이름<input name="name" required maxlength="60" autocomplete="off" placeholder="예시 통밀 샌드위치"></label>
+      <label class="field">영양표시의 기준 중량 (g)<input name="basis" type="number" inputmode="decimal" min="0.1" max="10000" step="any" value="100" required></label>
+      <div class="custom-grid" id="custom-nutrients"></div>
+      <p id="custom-error" class="error" role="alert" hidden></p>
+      <button class="button primary full" type="submit">식사에 추가</button>
+    </form>
+  </dialog>
+</body>
+</html>
