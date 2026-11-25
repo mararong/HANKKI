@@ -20,7 +20,7 @@ def package(url):
     target = root / "한끼_제출용.zip"
     with ZipFile(target, "w", ZIP_DEFLATED) as archive:
         archive.writestr("한끼 열기.html", page)
-        for name in ("README.md", "make_submission.py", "render.yaml"):
+        for name in ("README.md", "make_submission.py", "render.yaml", "run.py", "food_api.py"):
             archive.write(root / name, name)
         for name in ("app.js", "styles.css", "nutrition.js", "index.html",
                      "run.py", "food_api.py"):
