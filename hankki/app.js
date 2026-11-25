@@ -631,6 +631,8 @@
     if (state.view === "record" && drafts.get(draftKey()) === draft) updateSearch(draft);
   }
 
+  const recentSearches = new Map();
+
   function scheduleSearch(draft, query) {
     clearTimeout(draft.timer);
     draft.request?.abort();
@@ -641,10 +643,13 @@
     draft.searchMessage = term ? "식약처에서 검색 중…" : "";
     if (term && location.protocol === "file:") {
       draft.searchMessage = "음식 검색은 배포된 사이트나 실행 중인 서버에서 사용할 수 있어요.";
+    } else if (recentSearches.get(term)?.expires > Date.now()) {
+      draft.matches = recentSearches.get(term).foods;
+      draft.searchMessage = "일치하는 일반 음식이 없어요.";
     } else if (term) {
       const request = new AbortController();
       draft.request = request;
-      draft.timer = setTimeout(() => fetchFoods(draft, term, request.signal), 350);
+      draft.timer = setTimeout(() => fetchFoods(draft, term, request.signal), 220);
     }
     refreshVisibleSearch(draft);
   }
@@ -655,6 +660,8 @@
       const result = await response.json();
       if (signal.aborted) return;
       if (!response.ok) throw new Error();
+      recentSearches.set(term, { foods: result.foods, expires: Date.now() + 900000 });
+      if (recentSearches.size > 100) recentSearches.delete(recentSearches.keys().next().value);
       draft.matches = result.foods;
       draft.searchMessage = "검색 결과가 없어요. 다른 음식 이름을 입력해 보세요.";
     } catch {
