@@ -1,13 +1,15 @@
 """Name lookup in the MFDS Food Nutrient Database."""
+import gzip
 import json
 import math
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 from http.server import SimpleHTTPRequestHandler
 from urllib.parse import parse_qs, urlencode, urlsplit
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 ENDPOINT = "https://apis.data.go.kr/1471000/FoodNtrCpntDbInfo03/getFoodNtrCpntDbInq03"
 FIELDS = {"energy": 1, "carbs": 6, "protein": 3, "fat": 4, "fiber": 8, "sodium": 13}
@@ -124,8 +126,12 @@ def select_foods(items, term):
 def fetch_page(source, page, key, cache_period):
     params = dict(serviceKey=key, type="json", FOOD_NM_KR=source, numOfRows=100)
     url = ENDPOINT + "?" + urlencode(dict(params, pageNo=page))
-    with urlopen(url, timeout=8) as response:
-        data = json.load(response)
+    request = Request(url, headers={"Accept-Encoding": "gzip"})
+    with urlopen(request, timeout=8) as response:
+        if response.headers.get("Content-Encoding", "").lower() == "gzip":
+            data = json.loads(gzip.decompress(response.read()))
+        else:
+            data = json.load(response)
     data = data.get("response", data)
     if str(data.get("header", {}).get("resultCode", "")) not in ("00", "0", "0000"):
         raise ValueError("API response")
@@ -140,22 +146,56 @@ def fetch_page(source, page, key, cache_period):
     return [{k: row[k] for k in keep if k in row} for row in items], int(body.get("totalCount") or 0)
 
 
+# Share a bounded pool across requests so simultaneous typing cannot multiply
+# the number of connections opened to the upstream service.
+SEARCH_POOL = ThreadPoolExecutor(max_workers=8)
+
+
+def search_source(source, term, key, cache_period):
+    query = normalized(term)
+    rows = []
+    for page in range(1, 4):
+        items, total = fetch_page(source, page, key, cache_period)
+        rows.extend(items)
+        matches = select_foods(rows, term)
+        if matches and normalized(matches[0]["name"]) == query:
+            return rows, matches
+        if len(items) < 100 or (total and page * 100 >= total):
+            break
+    return rows, []
+
+
 @lru_cache(maxsize=384)
 def lookup(term, key, cache_period):
+    sources = list(dict.fromkeys(source_names(term)))
+    # Reserve the broad ingredient-prefix lookup for a genuine miss.
+    fallback = sources.pop() if len(sources) > 1 and sources[-1].startswith("_") else None
+    pending = [SEARCH_POOL.submit(search_source, source, term, key, cache_period)
+               for source in sources]
     rows = []
-    query = normalized(term)
-    for source in dict.fromkeys(source_names(term)):
-        for page in range(1, 4):
-            items, total = fetch_page(source, page, key, cache_period)
-            rows.extend(items)
-            matches = select_foods(rows, term)
-            if matches and normalized(matches[0]["name"]) == query:
-                return matches
-            if len(items) < 100 or (total and page * 100 >= total):
-                break
-        if source == term and (len(query) < 3 or query in DISH_BASES) and matches:
-            return matches
-    return select_foods(rows, term)
+    error = None
+    try:
+        for future in as_completed(pending):
+            try:
+                batch, exact = future.result()
+            except (OSError, ValueError, KeyError, AttributeError, TypeError) as exc:
+                error = exc
+                continue
+            if exact:
+                return exact
+            rows.extend(batch)
+    finally:
+        for future in pending:
+            future.cancel()
+    matches = select_foods(rows, term)
+    if fallback and (not matches or normalized(term) not in DISH_BASES):
+        more, exact = search_source(fallback, term, key, cache_period)
+        if exact:
+            return exact
+        matches = select_foods(rows + more, term)
+    if error:
+        raise error
+    return matches
 
 
 class FoodHandler(SimpleHTTPRequestHandler):

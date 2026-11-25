@@ -635,6 +635,7 @@
 
   function scheduleSearch(draft, query) {
     clearTimeout(draft.timer);
+    draft.timer = null;
     draft.request?.abort();
     draft.query = query;
     draft.matches = [];
@@ -649,7 +650,10 @@
     } else if (term) {
       const request = new AbortController();
       draft.request = request;
-      draft.timer = setTimeout(() => fetchFoods(draft, term, request.signal), 220);
+      draft.timer = setTimeout(() => {
+        draft.timer = null;
+        fetchFoods(draft, term, request.signal);
+      }, 150);
     }
     refreshVisibleSearch(draft);
   }
@@ -720,6 +724,15 @@
     }
     const button = event.target.closest("button[data-action]");
     if (button) actions[button.dataset.action]?.(button);
+  });
+
+  view.addEventListener("keydown", event => {
+    if (event.target.id !== "food-search" || event.key !== "Enter" || event.isComposing) return;
+    const draft = currentDraft();
+    if (draft.timer == null) return;
+    clearTimeout(draft.timer);
+    draft.timer = null;
+    fetchFoods(draft, draft.query.trim(), draft.request.signal);
   });
 
   view.addEventListener("input", event => {
