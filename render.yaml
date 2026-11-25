@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: hankki-food
+    runtime: python
+    plan: free
+    rootDir: hankki
+    buildCommand: python -m py_compile run.py food_api.py
+    startCommand: python run.py
+    envVars:
+      - key: MFDS_API_KEY
+        sync: false
