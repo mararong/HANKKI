@@ -22,8 +22,8 @@ def package(url):
         archive.writestr("한끼 열기.html", page)
         for name in ("README.md", "make_submission.py", "render.yaml"):
             archive.write(root / name, name)
-        for name in ("README.md", "app.js", "styles.css", "nutrition.js", "index.html",
-                     "run.py", "food_api.py", "data/foods.js"):
+        for name in ("app.js", "styles.css", "nutrition.js", "index.html",
+                     "run.py", "food_api.py"):
             archive.write(root / "hankki" / name, "hankki/" + name)
         for icon in sorted((root / "hankki/assets").glob("*.png")):
             archive.write(icon, "hankki/assets/" + icon.name)

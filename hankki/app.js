@@ -5,10 +5,8 @@
     meals, mealKeys, nutrients, nutrientKeys, reference, firstDate,
     dateKey, dateObject, isDate, changeDay, changeMonth, datesInPeriod,
     gramsOf, amountFor, summarize, valueOf, isComplete, averageOf,
-    mainContributor, entriesIn, findFoods,
+    mainContributor, entriesIn,
   } = window.HankkiNutrition;
-  const foods = window.HankkiFoods;
-  const catalog = new Map(foods.map(food => [food.id, food]));
   const storageKey = "hankki.meal-journal.v1";
   const pages = ["today", "record", "report"];
   const periods = { day: "일간", week: "주간", month: "월간" };
@@ -218,29 +216,27 @@
       const base = dayOf().meals[state.meal] || [];
       drafts.set(key, {
         base, entries: base.map(entry => ({ ...entry, grams: String(entry.grams) })),
-        query: "", replacing: null, allResults: false,
+        query: "", replacing: null, allResults: false, matches: [], searchMessage: "",
       });
     }
     return drafts.get(key);
   }
 
   function searchResults(draft) {
-    const matches = findFoods(foods, draft.query);
+    const matches = draft.matches;
     const limit = draft.allResults ? matches.length : 6;
-    const label = draft.replacing ? "바꿀 음식 선택" : draft.query.trim() ? "검색 결과" : "자주 찾는 음식";
+    const label = draft.replacing ? "바꿀 음식 선택" : "식약처 음식 검색";
     return `
       <div class="section-head results-head"><h3>${label}</h3><span class="muted">100 g 기준</span></div>
       ${matches.length ? `<div class="food-results">${matches.slice(0, limit).map(food => `
-        <button class="food-result" data-action="add-food" data-food="${food.id}" aria-label="${escapeHtml(food.name)} ${draft.replacing ? "선택" : "추가"}">
+        <button class="food-result" data-action="add-food" data-food="${escapeHtml(food.id)}" aria-label="${escapeHtml(food.name)} ${draft.replacing ? "선택" : "추가"}">
           <span><strong>${escapeHtml(food.name)}</strong>
-            <small>${food.category} · ${quantity(food.values.energy, "energy")}${food.values.protein === null ? "" : " · 단백질 " + quantity(food.values.protein, "protein")}</small>
+            <small>${quantity(food.values.energy, "energy")}${food.values.protein === null ? "" : " · 단백질 " + quantity(food.values.protein, "protein")}</small>
           </span>
           <span class="plus" aria-hidden="true">${draft.replacing ? "✓" : "＋"}</span>
-        </button>`).join("")}</div>` : '<p class="empty compact">찾은 음식이 없어요. 다른 음식 이름으로 검색하거나 영양표시를 입력해 추가하세요.</p>'}
+        </button>`).join("")}</div>` : `<p class="empty compact" role="status">${escapeHtml(draft.searchMessage || "음식 이름을 입력하면 식약처에서 검색해요.")}</p>`}
       ${matches.length > limit ? `<button class="text-button more-results" data-action="more-results">${draft.query.trim() ? "검색 결과 모두 보기" : "음식 목록 보기"} <small>${matches.length}개</small></button>` : ""}
       ${draft.replacing ? '<button class="text-button" data-action="cancel-replace">음식 변경 취소</button>' : ""}
-      <button class="button secondary full" data-action="external-search">식약처 음식 더 찾기</button>
-      <div id="external-results" aria-live="polite"></div>
       <button class="button secondary full manual-button" data-action="custom-food">영양표시로 직접 추가</button>`;
   }
 
@@ -248,7 +244,7 @@
     const food = entry.food;
     const name = escapeHtml(food.name);
     const entryId = escapeHtml(entry.id);
-    const source = catalog.get(food.id)?.source;
+    const source = food.id.startsWith("mfds-") ? "https://www.data.go.kr/data/15127578/openapi.do" : null;
     return `
       <div class="draft-entry" data-entry="${entryId}">
         <div class="section-head">
@@ -303,7 +299,7 @@
           <h2 id="search-heading">무엇을 드셨나요?</h2>
           <label class="search-box" for="food-search">${icon("search")}
             <span class="sr-only">음식 이름 검색</span>
-            <input id="food-search" type="search" value="${escapeHtml(draft.query)}" placeholder="음식 이름을 검색하세요" autocomplete="off">
+            <input id="food-search" maxlength="60" type="search" value="${escapeHtml(draft.query)}" placeholder="음식 이름을 검색하세요" autocomplete="off">
           </label>
           <div id="search-results">${searchResults(draft)}</div>
         </section>
@@ -614,8 +610,7 @@
     }
     if (action === "replace-food") {
       draft.replacing = entry.id;
-      draft.query = "";
-      draft.allResults = false;
+      scheduleSearch(draft, "");
       const search = document.getElementById("food-search");
       search.value = "";
       updateSearch(draft);
@@ -632,49 +627,44 @@
     updateDraftSummary(draft);
   }
 
-  async function externalSearch() {
-    const output = document.getElementById("external-results");
-    const term = currentDraft().query.trim();
-    if (!term) {
-      output.textContent = "검색창에 음식 이름을 먼저 입력하세요.";
-      return;
+  function refreshVisibleSearch(draft) {
+    if (state.view === "record" && drafts.get(draftKey()) === draft) updateSearch(draft);
+  }
+
+  function scheduleSearch(draft, query) {
+    clearTimeout(draft.timer);
+    draft.request?.abort();
+    draft.query = query;
+    draft.matches = [];
+    draft.allResults = false;
+    const term = query.trim();
+    draft.searchMessage = term ? "식약처에서 검색 중…" : "";
+    if (term && location.protocol === "file:") {
+      draft.searchMessage = "음식 검색은 배포된 사이트나 실행 중인 서버에서 사용할 수 있어요.";
+    } else if (term) {
+      const request = new AbortController();
+      draft.request = request;
+      draft.timer = setTimeout(() => fetchFoods(draft, term, request.signal), 350);
     }
-    const serverHint = "외부 검색은 README에 따라 인증키를 설정하고 run.py로 실행한 주소에서 사용할 수 있어요.";
-    if (location.protocol === "file:") {
-      output.textContent = serverHint;
-      return;
-    }
-    output.textContent = "식약처에서 검색 중…";
+    refreshVisibleSearch(draft);
+  }
+
+  async function fetchFoods(draft, term, signal) {
     try {
-      const response = await fetch("./api/foods?q=" + encodeURIComponent(term));
-      if (!response.headers.get("content-type")?.includes("application/json")) {
-        output.textContent = serverHint;
-        return;
-      }
+      const response = await fetch("./api/foods?q=" + encodeURIComponent(term), { signal });
       const result = await response.json();
-      if (!response.ok) {
-        output.textContent = result.error || "잠시 후 다시 검색해 주세요.";
-        return;
-      }
-      if (!output.isConnected) return;
-      output.replaceChildren();
-      for (const food of result.foods) {
-        catalog.set(food.id, food);
-        const button = document.createElement("button");
-        button.className = "food-result";
-        button.dataset.action = "add-food";
-        button.dataset.food = food.id;
-        button.textContent = food.name + " · " + quantity(food.values.energy, "energy") + " / 100 g";
-        output.append(button);
-      }
-      if (!result.foods.length) output.textContent = "중량 기준과 열량이 확인되는 결과가 없어요. 다른 이름으로 검색해 보세요.";
+      if (signal.aborted) return;
+      if (!response.ok) throw new Error();
+      draft.matches = result.foods;
+      draft.searchMessage = "검색 결과가 없어요. 다른 음식 이름을 입력해 보세요.";
     } catch {
-      output.textContent = "연결을 확인한 후 다시 검색해 주세요.";
+      if (signal.aborted) return;
+      draft.searchMessage = "식약처 음식을 불러오지 못했어요. 잠시 후 다시 검색해 주세요.";
     }
+    refreshVisibleSearch(draft);
   }
 
   const actions = {
-    "external-search": externalSearch,
     "edit-meal": button => { state.meal = button.dataset.meal; goTo("record"); },
     "select-meal": button => {
       state.meal = button.dataset.meal;
@@ -682,7 +672,7 @@
       view.querySelector('[data-action="select-meal"][aria-pressed="true"]').focus({ preventScroll: true });
     },
     "today-date": () => editDate(dateKey()),
-    "add-food": button => addOrReplace(catalog.get(button.dataset.food)),
+    "add-food": button => addOrReplace(currentDraft().matches.find(food => food.id === button.dataset.food)),
     "more-results": () => {
       currentDraft().allResults = true;
       updateSearch();
@@ -729,9 +719,7 @@
     const input = event.target;
     if (input.id === "food-search") {
       const draft = currentDraft();
-      draft.query = input.value;
-      draft.allResults = false;
-      updateSearch(draft);
+      scheduleSearch(draft, input.value);
     }
     if (input.matches("[data-weight]")) {
       const row = input.closest("[data-entry]");

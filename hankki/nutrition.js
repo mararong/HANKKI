@@ -121,28 +121,10 @@
     return mealKeys.flatMap(key => day.meals[key] || []);
   }
 
-  function normalizeSearch(text) {
-    return text.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
-  }
-
-  function findFoods(foods, query) {
-    const term = normalizeSearch(query.trim());
-    if (!term) return foods;
-    return foods.map(food => {
-      const words = [food.name, ...food.aliases].map(normalizeSearch);
-      const score = words.includes(term) ? 0 :
-        words.some(word => word.startsWith(term)) ? 1 :
-        words.some(word => word.includes(term)) ? 2 : Infinity;
-      return { food, score };
-    }).filter(({ score }) => score < Infinity)
-      .sort((a, b) => a.score - b.score)
-      .map(({ food }) => food);
-  }
-
   globalThis.HankkiNutrition = {
     meals, mealKeys, nutrients, nutrientKeys, reference, firstDate,
     dateKey, dateObject, isDate, changeDay, changeMonth, datesInPeriod,
     gramsOf, amountFor, summarize, valueOf, isComplete, averageOf,
-    mainContributor, entriesIn, findFoods,
+    mainContributor, entriesIn,
   };
 })();
