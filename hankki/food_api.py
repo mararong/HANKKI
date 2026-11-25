@@ -35,10 +35,56 @@ def normalized(name):
     return "".join(name.casefold().split())
 
 
-# Everyday menu names can differ from the database's dish_ingredient notation.
-MENU_NAMES = {"국밥_돼지고기": "돼지국밥"}
-LOOKUP_NAMES = {display: source for source, display in MENU_NAMES.items()}
-CONDIMENTS = ("소스", "양념", "분말", "농축액", "육수", "베이스", "양념장")
+# MFDS frequently stores a compound dish as base_modifier.
+DISH_BASES = sorted("""
+볶음밥 비빔밥 덮밥 김밥 주먹밥 국밥 초밥 쌈밥 죽 밥
+칼국수 막국수 냉국수 국수 냉면 라면 우동 짬뽕 짜장면 파스타 스파게티 수제비
+된장찌개 김치찌개 찌개 전골 갈비탕 탕 미역국 해장국 된장국 국
+떡볶이 불고기 갈비찜 볶음 조림 무침 구이 튀김 부침개 전 찜
+샌드위치 햄버거 버거 피자 샐러드 만두 떡 빵 케이크 수프 스프
+""".split(), key=len, reverse=True)
+PLAIN = {"일반", "기본", "보통"}
+CONDIMENTS = ("소스", "분말", "농축액", "육수", "베이스", "양념장")
+# The database spells the ingredient out, while the common menu name is shorter.
+SHORT_INGREDIENTS = {"돼지고기": "돼지", "소고기": "소", "쇠고기": "소"}
+SEARCH_ALIASES = {"돼지국밥": "국밥_돼지고기"}
+
+
+def menu_name(raw, query):
+    parts = [part.strip() for part in raw.split("_")]
+    if len(parts) != 2 or not all(parts):
+        return raw
+    base, modifier = parts
+    if modifier in PLAIN:
+        return base
+    if modifier.endswith(base):
+        return modifier
+    if normalized(modifier + base) == query:
+        return modifier + base
+    if normalized(SHORT_INGREDIENTS.get(modifier, modifier) + base) == query:
+        return SHORT_INGREDIENTS.get(modifier, modifier) + base
+    if normalized(raw) == query:
+        return raw
+    if base in DISH_BASES and not any(c in modifier for c in "(),/"):
+        return modifier + base
+    return raw
+
+
+def source_names(term):
+    query = normalized(term)
+    if query in SEARCH_ALIASES:
+        yield SEARCH_ALIASES[query]
+    for base in DISH_BASES:
+        if query != base and query.endswith(base):
+            yield base + "_" + query[:-len(base)]
+            break
+    yield term
+    if query != term:
+        yield query
+    # An unfamiliar dish type can also use base_modifier notation.
+    # A modifier prefix narrows the API lookup; selection checks the whole name.
+    if len(query) >= 3:
+        yield "_" + query[:2]
 
 
 def select_foods(items, term):
@@ -57,11 +103,11 @@ def select_foods(items, term):
         if not food:
             continue
         raw = food["name"].strip()
-        display = MENU_NAMES.get(raw, raw)
+        display = menu_name(raw, query)
         name = normalized(display)
         if query not in name and query not in normalized(raw):
             continue
-        if any(part in name and part not in query for part in CONDIMENTS):
+        if name != query and any(part in name and part not in query for part in CONDIMENTS):
             continue
         food["name"] = display
         rank = (row.get("DB_CLASS_NM") != "품목대표",
@@ -75,30 +121,41 @@ def select_foods(items, term):
 
 
 @lru_cache(maxsize=384)
-def lookup(term, key, cache_period):
-    source = LOOKUP_NAMES.get(term, term)
+def fetch_page(source, page, key, cache_period):
     params = dict(serviceKey=key, type="json", FOOD_NM_KR=source, numOfRows=100)
-    if source == "국밥_돼지고기":
-        params.update(FOOD_CAT1_NM="밥류", numOfRows=20)
+    url = ENDPOINT + "?" + urlencode(dict(params, pageNo=page))
+    with urlopen(url, timeout=8) as response:
+        data = json.load(response)
+    data = data.get("response", data)
+    if str(data.get("header", {}).get("resultCode", "")) not in ("00", "0", "0000"):
+        raise ValueError("API response")
+    body = data["body"]
+    items = body.get("items") or []
+    if isinstance(items, dict):
+        items = items.get("item") or []
+    if isinstance(items, dict):
+        items = [items]
+    keep = ("FOOD_CD", "FOOD_NM_KR", "SERVING_SIZE", "MAKER_NM", "DB_GRP_CM", "DB_CLASS_NM",
+            *("AMT_NUM" + str(n) for n in FIELDS.values()))
+    return [{k: row[k] for k in keep if k in row} for row in items], int(body.get("totalCount") or 0)
+
+
+@lru_cache(maxsize=384)
+def lookup(term, key, cache_period):
     rows = []
-    for page in range(1, 4):
-        url = ENDPOINT + "?" + urlencode(dict(params, pageNo=page))
-        with urlopen(url, timeout=8) as response:
-            data = json.load(response)
-        data = data.get("response", data)
-        if str(data.get("header", {}).get("resultCode", "")) not in ("00", "0", "0000"):
-            raise ValueError("API response")
-        body = data["body"]
-        items = body.get("items") or []
-        if isinstance(items, dict):
-            items = items.get("item") or []
-        if isinstance(items, dict):
-            items = [items]
-        rows.extend(items)
-        foods = select_foods(rows, term)
-        if foods or len(items) < params["numOfRows"] or page * params["numOfRows"] >= int(body.get("totalCount") or len(rows)):
-            break
-    return foods
+    query = normalized(term)
+    for source in dict.fromkeys(source_names(term)):
+        for page in range(1, 4):
+            items, total = fetch_page(source, page, key, cache_period)
+            rows.extend(items)
+            matches = select_foods(rows, term)
+            if matches and normalized(matches[0]["name"]) == query:
+                return matches
+            if len(items) < 100 or (total and page * 100 >= total):
+                break
+        if source == term and (len(query) < 3 or query in DISH_BASES) and matches:
+            return matches
+    return select_foods(rows, term)
 
 
 class FoodHandler(SimpleHTTPRequestHandler):
@@ -113,7 +170,6 @@ class FoodHandler(SimpleHTTPRequestHandler):
         if not 1 <= len(term) <= 60:
             return self.reply(400, {"error": "음식 이름을 1~60자로 입력해 주세요."})
         try:
-            term = normalized(term) if normalized(term) in LOOKUP_NAMES else term
             foods = lookup(term, key, int(time.time() // 3600))
         except (OSError, ValueError, KeyError, AttributeError, TypeError):
             return self.reply(502, {"error": "공공데이터 조회에 실패했어요. 인증키의 승인 상태와 연결을 확인해 주세요."})
